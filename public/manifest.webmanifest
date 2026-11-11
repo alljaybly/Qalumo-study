@@ -1,0 +1,20 @@
+{
+  "id": "/",
+  "name": "Qalumo",
+  "short_name": "Qalumo",
+  "description": "A calm, offline-friendly study companion for South African learners and caregivers.",
+  "lang": "en-ZA",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#fbf7ee",
+  "theme_color": "#123f43",
+  "icons": [
+    {
+      "src": "/icons/qalumo.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
