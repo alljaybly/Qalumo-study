@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react';
 import type { ChangeEvent, FormEvent } from 'react';
 import { askAi, validateAiSettings } from '../services/ai';
 import { extractHomeworkText, MAX_HOMEWORK_FILE_BYTES } from '../services/document';
+import { deriveTitle } from '../data/studyBuddyGuide';
 import { createId } from '../data/logic';
 import { GRADES } from '../types';
 import type { AiSettings, Grade, HomeworkItem, HomeworkUnderstanding, StudyData } from '../types';
@@ -127,8 +128,14 @@ export default function HomeworkPage({ data, persist, aiSettings, apiKey }: Prop
 
   async function saveHomework(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!draft.title.trim() || !draft.subject.trim() || !GRADES.includes(draft.grade as Grade)) {
-      setFormError('Add a title, subject, and valid grade before saving.');
+    const assignmentText = draft.extractedText.trim();
+    // Assignment text is enough to start. Title and subject are filled in later, or derived here.
+    if (!assignmentText && !draft.title.trim()) {
+      setFormError('Paste or type the assignment first. A title is optional once the text is there.');
+      return;
+    }
+    if (!GRADES.includes(draft.grade as Grade)) {
+      setFormError('Choose a valid grade before saving.');
       return;
     }
     if (draft.extractedText.length > 500_000) {
@@ -139,11 +146,11 @@ export default function HomeworkPage({ data, persist, aiSettings, apiKey }: Prop
     const item: HomeworkItem = {
       ...draft,
       id: editingId ?? createId(),
-      title: draft.title.trim(),
-      subject: draft.subject.trim(),
+      title: draft.title.trim() || deriveTitle(assignmentText) || 'Untitled assignment',
+      subject: draft.subject.trim() || 'Not set',
       dueDate: draft.dueDate,
       sourceFileName: draft.sourceFileName.trim(),
-      extractedText: draft.extractedText.trim(),
+      extractedText: assignmentText,
       learnerNotes: draft.learnerNotes.trim(),
       createdAt: existing?.createdAt ?? new Date().toISOString(),
       understanding: {
@@ -242,8 +249,8 @@ export default function HomeworkPage({ data, persist, aiSettings, apiKey }: Prop
       return;
     }
     const disclosure = aiSettings.mode === 'online'
-      ? 'This sends only the selected homework title, subject, assignment text, and this question to your configured online provider. The provider may charge fees and has its own data-handling terms. Qalumo cannot guarantee provider privacy. AI is not yet tested end-to-end in this project. Continue?'
-      : `This sends only the selected homework title, subject, assignment text, and this question to the local service at ${aiSettings.baseUrl}. Qalumo has not tested AI end-to-end in this project. Continue?`;
+      ? 'This sends only the selected homework title, subject, assignment text, and this question to your configured online provider. The provider may charge fees and has its own data-handling terms. Qalumo cannot guarantee provider privacy, and no hosted provider has been verified with this app. Continue?'
+      : `This sends only the selected homework title, subject, assignment text, and this question to the local service at ${aiSettings.baseUrl}. Local mode is advanced/experimental and depends on that service allowing this app’s origin. Continue?`;
     if (!window.confirm(disclosure)) return;
     setAiBusy(true);
     try {
@@ -277,7 +284,7 @@ export default function HomeworkPage({ data, persist, aiSettings, apiKey }: Prop
 
   return <>
     <header className="page-intro">
-      <div><p className="eyebrow">Study section</p><h1>Homework, one step at a time.</h1><p className="intro-copy">Save assignment text on this device, review it, and plan your own work. Files are read in this browser; Qalumo does not upload them.</p></div>
+      <div><p className="eyebrow">Homework</p><h1>Start with the assignment text.</h1><p className="intro-copy">Paste it or add a file and save. Title, subject, and due date can wait until you need them. Everything stays in this browser.</p></div>
       <button className="button button-primary" type="button" onClick={startNew}>Add homework <span aria-hidden="true">+</span></button>
     </header>
 
@@ -289,19 +296,24 @@ export default function HomeworkPage({ data, persist, aiSettings, apiKey }: Prop
     {showForm && <form className="form-card homework-editor" onSubmit={saveHomework} noValidate>
       <div className="editor-heading"><div><p className="eyebrow">Saved privately on this device</p><h2>{editingId ? 'Edit homework' : 'Add homework'}</h2></div><button type="button" className="icon-button" aria-label="Close homework form" onClick={() => { setShowForm(false); setFormError(''); }}>×</button></div>
       <label>Choose a TXT, PDF, or DOCX file<input type="file" accept=".txt,.pdf,.docx,text/plain,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document" onChange={(event) => void loadFile(event)} disabled={busy} /></label>
-      <p className="field-hint">File text is extracted only in your browser. PDF images are not read. You can also paste text directly.</p>
+      <p className="field-hint">The text is enough to start. File text is extracted only in your browser, and PDF images are not read.</p>
+      <p className="field-hint">If the assignment is on a website or school app, open it, copy the instructions, and paste them below. Qalumo cannot open links, read a website, or sign in for you.</p>
       {fileProgress && <p className="progress-message" role="status">{fileProgress}</p>}
-      <div className="form-row">
-        <label>Homework title *<input maxLength={160} value={draft.title} onChange={(event) => updateDraft('title', event.target.value)} required /></label>
-        <label>Subject *<input maxLength={100} value={draft.subject} onChange={(event) => updateDraft('subject', event.target.value)} required /></label>
-      </div>
-      <div className="form-row">
-        <label>Grade *<select value={draft.grade} onChange={(event) => updateDraft('grade', event.target.value as Grade)}>{GRADES.map((grade) => <option key={grade}>{grade}</option>)}</select></label>
-        <label>Due date (optional)<input type="date" value={draft.dueDate} onChange={(event) => updateDraft('dueDate', event.target.value)} /></label>
-      </div>
       {draft.sourceFileName && <div className="homework-source-file"><strong>Source file:</strong> {draft.sourceFileName} · {draft.sourceType.toUpperCase()}</div>}
       <label>Assignment text — review and correct before use<textarea rows={10} maxLength={500000} value={draft.extractedText} onChange={(event) => updateDraft('extractedText', event.target.value)} placeholder="Paste or type the homework instructions here." /></label>
-      <label>Learner notes<textarea rows={3} maxLength={5000} value={draft.learnerNotes} onChange={(event) => updateDraft('learnerNotes', event.target.value)} placeholder="Your own reminders or questions (optional)" /></label>
+      <details className="homework-optional-details" open>
+        <summary>Optional details</summary>
+        <p className="field-hint">Leave these for now if you only want to save the text. A title is made from the first line if you leave it blank.</p>
+        <div className="form-row">
+          <label>Title<input maxLength={160} value={draft.title} onChange={(event) => updateDraft('title', event.target.value)} /></label>
+          <label>Subject<input maxLength={100} value={draft.subject} onChange={(event) => updateDraft('subject', event.target.value)} placeholder="Not set" /></label>
+        </div>
+        <div className="form-row">
+          <label>Grade<select value={draft.grade} onChange={(event) => updateDraft('grade', event.target.value as Grade)}>{GRADES.map((grade) => <option key={grade}>{grade}</option>)}</select></label>
+          <label>Due date<input type="date" value={draft.dueDate} onChange={(event) => updateDraft('dueDate', event.target.value)} /></label>
+        </div>
+        <label>Your notes<textarea rows={3} maxLength={5000} value={draft.learnerNotes} onChange={(event) => updateDraft('learnerNotes', event.target.value)} placeholder="Your own reminders or questions (optional)" /></label>
+      </details>
       <details className="homework-breakdown-editor" open>
         <summary>Edit your manual breakdown and study prompts</summary>
         <p className="field-hint">These fields are saved with this homework. Add your own interpretation; generic starter prompts are not assignment answers.</p>
@@ -353,7 +365,7 @@ export default function HomeworkPage({ data, persist, aiSettings, apiKey }: Prop
         <button className="button button-outline" type="button" onClick={() => startEdit(selected)}>Edit notes and breakdown</button>
       </section>
       <section className="homework-ai-panel">
-        <div className="ai-disclosure"><strong>Optional AI suggestions · not tested end-to-end in this project</strong><p>AI actions need your configured online API or local compatible service and may fail. Online requests send the selected assignment content and your chosen prompt to the provider. Check every suggestion against your class instructions and trusted materials. Do your own work; suggestions are not guaranteed answers.</p></div>
+        <div className="ai-disclosure"><strong>Optional AI suggestions · no hosted provider verified</strong><p>AI actions need your configured online API or local compatible service and may fail. Online requests send the selected assignment content and your chosen prompt to the provider. Check every suggestion against your class instructions and trusted materials. Do your own work; suggestions are not guaranteed answers. The local planning tools on this page work without AI.</p></div>
         {aiSettings.mode === 'off' && <p className="field-hint">AI is off. The local notes, editable steps, questions, and brainstorming fields above still work.</p>}
         <div className="homework-ai-actions">{aiActions.map((action) => <button key={action.title} className="button button-outline" type="button" disabled={aiBusy || !selected.extractedText.trim()} onClick={() => void askForHelp(selected, action.prompt)}>{action.title}</button>)}</div>
         {aiBusy && <p className="progress-message" role="status">Waiting for the configured AI service…</p>}

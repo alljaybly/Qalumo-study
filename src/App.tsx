@@ -6,12 +6,18 @@ import type { AiSettings, Assessment, BackupFile, PracticeAttempt, PracticeQuest
 import { samplePracticeSets } from './data/samplePractice';
 import { answerMatches, createId, isVideoResource, percentage, planVideoLibraryImport, validateBackup, validateVideoLibrary } from './data/logic';
 import { askAi, testAiConnection, validateAiSettings } from './services/ai';
+import type { AiConnectionTest } from './services/ai';
 import { deleteAllLocalData, emptyStudyData, loadAiSettings, loadStudyData, loadVideoLibrary, saveAiSettings, saveFullBackup, saveStudyData, saveVideoLibrary } from './services/storage';
 import { LIVE_QALUMO_APP_URL } from './config';
 import HomeworkPage from './pages/HomeworkPage';
 import StudyLibraryPage from './pages/StudyLibraryPage';
+import StudyBuddyPage from './pages/StudyBuddyPage';
+import type { AssignmentAnalysis } from './data/studyBuddyGuide';
 
-type Page = 'Home' | 'Results' | 'Practise' | 'Homework' | 'Study library' | 'Resources' | 'Settings' | 'Help';
+type Page = 'Home' | 'Results' | 'Practise' | 'Homework' | 'Study library' | 'Resources' | 'Settings' | 'Help' | 'Study buddy';
+
+// A one-off handoff from the Home composer into the study-buddy page. It is deliberately not
+// saved with learner data: nothing changes in IndexedDB or the backup format.
 type ResultDraft = { subject: string; topic: string; date: string; earned: string; total: string; note: string };
 type ReportSubjectDraft = { id: string; subject: string; topic: string; format: SchoolReportSubjectResult['format']; earned: string; total: string; value: string; achievement: string };
 type ReportDraft = { schoolYear: string; term: string; periodLabel: string; grade: string; reportDate: string; notes: string; subjects: ReportSubjectDraft[] };
@@ -23,7 +29,7 @@ type BeforeInstallPromptEvent = Event & {
   userChoice: Promise<{ outcome: 'accepted' | 'dismissed'; platform: string }>;
 };
 
-const navigation: Page[] = ['Home', 'Results', 'Practise', 'Homework', 'Study library', 'Resources', 'Settings', 'Help'];
+const navigation: Page[] = ['Home', 'Study buddy', 'Results', 'Practise', 'Homework', 'Study library', 'Resources', 'Settings', 'Help'];
 const subjectSuggestions = [
   'Mathematics', 'English Home Language', 'English First Additional Language', 'Afrikaans',
   'isiZulu', 'Natural Sciences', 'Social Sciences', 'Technology', 'Life Orientation',
@@ -89,6 +95,7 @@ function App() {
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
   const [installPrompt, setInstallPrompt] = useState<BeforeInstallPromptEvent | null>(null);
+  const [buddyStart, setBuddyStart] = useState<{ text: string; link: boolean; key: number } | null>(null);
 
   useEffect(() => {
     Promise.allSettled([loadStudyData(), loadAiSettings(), loadVideoLibrary()])
@@ -169,6 +176,39 @@ function App() {
     }
   }
 
+  function openStudyBuddy(text = '', link = false) {
+    setBuddyStart({ text, link, key: Date.now() });
+    setPage('Study buddy');
+    setError('');
+    setMessage('');
+  }
+
+  async function saveStudyBuddyHomework(text: string, analysis: AssignmentAnalysis): Promise<boolean> {
+    const item = {
+      id: createId(),
+      title: analysis.title || 'My assignment',
+      grade: (GRADES.includes(data.profile.grade as typeof GRADES[number]) ? data.profile.grade : 'Grade 8') as typeof GRADES[number],
+      subject: 'Not set',
+      dueDate: '',
+      sourceFileName: '',
+      sourceType: 'pasted' as const,
+      extractedText: text.slice(0, 500_000),
+      learnerNotes: '',
+      createdAt: new Date().toISOString(),
+      archived: false,
+      understanding: {
+        instructions: analysis.summary,
+        deliverables: analysis.deliverables.join('; '),
+        constraints: analysis.constraints.join('; '),
+        steps: analysis.steps,
+        difficultTerms: analysis.terms,
+        comprehensionQuestions: analysis.quiz,
+        brainstormPrompts: [],
+      },
+    };
+    return persist({ ...data, homework: [item, ...data.homework] }, 'Saved to your homework on this device. You can add a subject or due date there.');
+  }
+
   async function installApp() {
     if (!installPrompt) return;
     try {
@@ -221,7 +261,7 @@ function App() {
             <button aria-label="Dismiss message" onClick={() => { setError(''); setMessage(''); }}>×</button>
           </div>}
           {!storageReady && !error && <div className="notice notice-warn" role="status">Local storage is not ready yet. Your changes will not be saved until storage is available.</div>}
-          {page === 'Home' && <HomePage data={data} setPage={setPage} aiSettings={aiSettings} apiKey={apiKey} setError={setError} setMessage={setMessage} />}
+          {page === 'Home' && <HomePage data={data} setPage={setPage} aiSettings={aiSettings} apiKey={apiKey} setError={setError} setMessage={setMessage} onOpenStudyBuddy={openStudyBuddy} />}
           {page === 'Results' && <ResultsPage data={data} persist={persist} />}
           {page === 'Practise' && <PracticePage data={data} persist={persist} />}
           {page === 'Homework' && <HomeworkPage data={data} persist={persist} aiSettings={aiSettings} apiKey={apiKey} />}
@@ -229,6 +269,16 @@ function App() {
           {page === 'Resources' && <ResourcesPage data={data} videoResources={videoResources} persist={persist} persistVideoLibrary={persistVideoLibrary} aiSettings={aiSettings} apiKey={apiKey} setError={setError} setMessage={setMessage} />}
           {page === 'Settings' && <SettingsPage data={data} videoResources={videoResources} persist={persist} setData={setData} setVideoResources={setVideoResources} setError={setError} setMessage={setMessage} aiSettings={aiSettings} persistAiSettings={persistAiSettings} apiKey={apiKey} setApiKey={setApiKey} setAiSettings={setAiSettings} />}
           {page === 'Help' && <HelpPage setPage={setPage} />}
+          {page === 'Study buddy' && <StudyBuddyPage
+            key={buddyStart?.key ?? 'home'}
+            initialText={buddyStart?.text ?? ''}
+            startWithLink={buddyStart?.link ?? false}
+            aiSettings={aiSettings}
+            apiKey={apiKey}
+            onSaveHomework={saveStudyBuddyHomework}
+            onOpenHomework={() => setPage('Homework')}
+            onOpenSettings={() => setPage('Settings')}
+          />}
           <footer className="app-footer">
             <span>Qalumo · Offline-first and private</span>
             <span>Curriculum content is user-provided unless a source is shown. No official CAPS alignment is claimed.</span>
@@ -243,14 +293,16 @@ function PageIntro({ eyebrow, title, description, action }: { eyebrow: string; t
   return <div className="page-intro"><div><p className="eyebrow">{eyebrow}</p><h1>{title}</h1><p className="intro-copy">{description}</p></div>{action}</div>;
 }
 
-function HomePage({ data, setPage, aiSettings, apiKey, setError, setMessage }: {
+function HomePage({ data, setPage, aiSettings, apiKey, setError, setMessage, onOpenStudyBuddy }: {
   data: StudyData;
   setPage: (page: Page) => void;
   aiSettings: AiSettings;
   apiKey: string;
   setError: (message: string) => void;
   setMessage: (message: string) => void;
+  onOpenStudyBuddy: (text?: string, link?: boolean) => void;
 }) {
+  const [startText, setStartText] = useState('');
   const results = [...data.assessments].sort((a, b) => b.date.localeCompare(a.date));
   const groups = new Map<string, Assessment[]>();
   data.assessments.forEach((result) => {
@@ -272,11 +324,21 @@ function HomePage({ data, setPage, aiSettings, apiKey, setError, setMessage }: {
   const displayName = data.profile.nickname.trim() || 'learner';
 
   return <>
-    <PageIntro eyebrow="Your study space" title={`Welcome${data.profile.nickname ? `, ${data.profile.nickname}` : ''}.`} description="A quiet place to notice progress, practise a little, and keep useful notes close." action={<button className="button button-primary" onClick={() => setPage('Results')}>Add a result <span aria-hidden="true">+</span></button>} />
-    <section className="welcome-strip">
-      <div><p className="eyebrow">One step at a time</p><h2>{data.profile.grade ? `${data.profile.grade} study space` : 'Make this space yours'}</h2><p>{data.profile.grade ? `Welcome back, ${displayName}. Your work stays on this device.` : 'Add a nickname, grade, and subjects to get started. A real name is not needed.'}</p></div>
-      <button className="button button-light" onClick={() => setPage(data.profile.grade ? 'Practise' : 'Settings')}>{data.profile.grade ? 'Choose a practice set' : 'Set up learner profile'} <span aria-hidden="true">→</span></button>
+    <PageIntro eyebrow="Your study space" title={`Welcome${data.profile.nickname ? `, ${data.profile.nickname}` : ''}.`} description={`Start with what you are working on. Qalumo helps you understand the task and take one small step at a time.${data.profile.grade ? '' : ' A nickname, grade, and subjects are optional.'}`} />
+    <section className="buddy-start home-start" aria-labelledby="home-start-title">
+      <p className="eyebrow">What are you working on?</p>
+      <h2 id="home-start-title">Type it or paste it. Start without a long form.</h2>
+      <form className="home-start-form" onSubmit={(event) => { event.preventDefault(); if (startText.trim()) onOpenStudyBuddy(startText.trim()); }}>
+        <label className="sr-only" htmlFor="home-start-text">Question, topic, or homework instructions</label>
+        <textarea id="home-start-text" rows={3} maxLength={50000} value={startText} onChange={(event) => setStartText(event.target.value)} placeholder="A question, a topic, or the homework instructions…" />
+        <div className="buddy-start-actions">
+          <button className="button button-primary" type="submit" disabled={!startText.trim()}>Start <span aria-hidden="true">→</span></button>
+          <button className="button button-outline" type="button" onClick={() => onOpenStudyBuddy('', true)}>My assignment is in a link</button>
+        </div>
+      </form>
+      <p className="home-start-note">No account or API key needed. This text stays on this device unless you choose to send it to an AI service you have configured. {displayName === 'learner' ? '' : `Welcome back, ${displayName}.`}</p>
     </section>
+    {!data.profile.grade && <div className="soft-card home-profile-nudge"><p><strong>Optional:</strong> add a grade and subjects in Settings so practice sets and examples fit you better. You can start working without them.</p><button className="button button-outline" type="button" onClick={() => setPage('Settings')}>Set up learner profile</button></div>}
 
     <div className="stat-grid">
       <article className="stat-card"><span className="stat-label">Assessments recorded</span><strong>{data.assessments.length}</strong><span>Original marks stay visible</span></article>
@@ -1041,8 +1103,8 @@ function HelpPage({ setPage }: { setPage: (page: Page) => void }) {
         <h2 id="offline-guide-title">11. What works offline?</h2>
         <p>Qalumo’s production build passed simulated desktop-browser checks: after opening online and loading the app assets, the app shell, styled pages, saved records, and TXT/PDF/DOCX extraction were available in a browser reload with the local preview server stopped. This is a simulated desktop-browser check, not a physical-device test.</p>
         <p>Saved learner records and resources are stored locally in the browser on that device. They are not automatically synced between a phone and laptop. To share selected homework, notes, or tests, use <strong>Study library → Export selected study library</strong>, move the file yourself, and import it on the other device. This is a manual file transfer.</p>
-        <p>Video playback, new web research, and online AI require internet. Video playback also depends on the original video remaining available. The optional LLM feature has <strong>not been tested end-to-end</strong>; do not assume it works offline.</p>
-        <div className="ai-disclosure"><strong>AI status: not yet tested end-to-end</strong><p>AI may need internet or a separately configured local compatible service and may fail. Do not assume it works offline. Check generated explanations, questions, and answers against class instructions and trusted learning materials; they are not guaranteed correct. Never put API keys in files you export.</p></div>
+        <p>Video playback, new web research, and online AI require internet. Video playback also depends on the original video remaining available. Local AI mode was tested on a desktop browser against a local Ollama service only; hosted providers, phones, and offline AI are unverified, so do not assume AI works everywhere.</p>
+        <div className="ai-disclosure"><strong>AI status: partly verified, provider-dependent</strong><p>AI may need internet or a separately configured local compatible service and may fail. Local mode needs that service running with this app’s exact origin allowed; online mode needs your own provider account and key. Check generated explanations, questions, and answers against class instructions and trusted learning materials; they are not guaranteed correct. Never put API keys in files you export.</p></div>
       </section>
 
       <section className="content-card help-section" aria-labelledby="install-guide-title">
@@ -1460,6 +1522,7 @@ function SettingsPage({ data, videoResources, persist, setData, setVideoResource
   const [aiDraft, setAiDraft] = useState(aiSettings);
   const [aiError, setAiError] = useState('');
   const [aiStatus, setAiStatus] = useState('');
+  const [aiTest, setAiTest] = useState<AiConnectionTest | null>(null);
   const [testingAi, setTestingAi] = useState(false);
 
   useEffect(() => {
@@ -1491,6 +1554,7 @@ function SettingsPage({ data, videoResources, persist, setData, setVideoResource
   async function testConnection() {
     setAiError('');
     setAiStatus('');
+    setAiTest(null);
     const validationError = validateAiSettings(aiDraft);
     if (validationError) {
       setAiError(validationError);
@@ -1506,8 +1570,7 @@ function SettingsPage({ data, videoResources, persist, setData, setVideoResource
     if (!window.confirm(disclosure)) return;
     setTestingAi(true);
     try {
-      await testAiConnection(aiDraft, apiKey);
-      setAiStatus('Connection test succeeded. No learner records were sent.');
+      setAiTest(await testAiConnection(aiDraft, apiKey));
     } catch (cause) {
       setAiError(cause instanceof Error ? cause.message : 'The connection test could not be completed.');
     } finally {
@@ -1584,6 +1647,7 @@ function SettingsPage({ data, videoResources, persist, setData, setVideoResource
       setApiKey('');
       setAiDraft(DEFAULT_AI_SETTINGS);
       setAiSettings(DEFAULT_AI_SETTINGS);
+      setAiTest(null);
       setError('');
       setMessage('All Qalumo data stored on this device has been deleted.');
     } catch (cause) {
@@ -1608,15 +1672,29 @@ function SettingsPage({ data, videoResources, persist, setData, setVideoResource
               if (mode === 'off') setApiKey('');
               setAiError('');
               setAiStatus('');
-            }}><option value="off">Off</option><option value="online">Online API</option><option value="local">Local compatible service</option></select></label>
+              setAiTest(null);
+            }}><option value="off">Off</option><option value="online">Online API</option><option value="local">Local compatible service (advanced, experimental)</option></select></label>
             {aiDraft.mode !== 'off' && <>
               <label>{aiDraft.mode === 'online' ? 'Provider / API base URL *' : 'Local service base URL *'}<input type="url" required value={aiDraft.baseUrl} onChange={(event) => updateAiDraft('baseUrl', event.target.value)} placeholder={aiDraft.mode === 'local' ? 'http://localhost:1234/v1' : 'https://your-provider.example/v1'} /><small>Uses an OpenAI-compatible chat-completions endpoint. No provider is selected or bundled.</small></label>
               <label>Model name *<input required value={aiDraft.model} onChange={(event) => updateAiDraft('model', event.target.value)} placeholder="Enter a model name supported by your service" /></label>
-              {aiDraft.mode === 'online' ? <label>API key for this session<input type="password" autoComplete="new-password" value={apiKey} onChange={(event) => setApiKey(event.target.value)} placeholder="Not saved; cleared when this app session ends" /><small>Qalumo keeps this key in memory only. It is never stored, exported, put in a URL, or logged. Do not put keys in the base URL. Use only HTTPS.</small></label> : <div className="ai-disclosure local-disclosure"><p>You must install and run a compatible local LLM service yourself and configure it to allow browser requests (CORS). The URL must point to this device or a local network address. Qalumo does not install or include a model. A local model may not run on this phone; you can still use all non-AI features.</p></div>}
+              {aiDraft.mode === 'online' ? <label>API key for this session<input type="password" autoComplete="new-password" value={apiKey} onChange={(event) => setApiKey(event.target.value)} placeholder="Not saved; cleared when this app session ends" /><small>Qalumo keeps this key in memory only. It is never stored, exported, put in a URL, or logged. Do not put keys in the base URL. Use only HTTPS.</small></label> : <div className="ai-disclosure local-disclosure"><p><strong>Advanced / experimental.</strong> Install and run a compatible local LLM service yourself, pull the model, and allow this app’s exact origin in that service. For Ollama, set <code>OLLAMA_ORIGINS</code> to <code>{LIVE_QALUMO_APP_URL.replace(/\/$/, '')}</code> (no trailing slash) and restart it. Current Chrome/Edge may also ask for local-network permission. Use <code>http://localhost</code> or <code>http://127.0.0.1</code>; a private <code>http://192.168.x.x</code> address is blocked as insecure from the installed HTTPS app. Qalumo does not install or include a model, and a local model may not run on this phone. All non-AI features work without it.</p></div>}
             </>}
             {aiError && <p className="field-error" role="alert">{aiError}</p>}
             {aiStatus && <p className="ai-success" role="status">{aiStatus}</p>}
             <div className="form-actions"><button className="button button-primary" type="submit">Save AI settings</button>{aiDraft.mode !== 'off' && <button className="button button-outline" type="button" disabled={testingAi} onClick={testConnection}>{testingAi ? 'Testing…' : 'Test connection'}</button>}</div>
+            {aiTest && <div className={`ai-test-result ${aiTest.ok ? 'is-ok' : 'is-fail'}`} role="status" aria-live="polite">
+              <strong>{aiTest.ok ? 'Connection test succeeded' : 'Connection test failed'}</strong>
+              <p className={aiTest.ok ? 'ai-success' : 'ai-error'}>{aiTest.ok ? `Service reply: ${aiTest.message}` : aiTest.message}</p>
+              <dl>
+                <div><dt>Mode</dt><dd>{aiTest.mode === 'online' ? 'Online API' : aiTest.mode === 'local' ? 'Local compatible service' : 'Off'}</dd></div>
+                <div><dt>Endpoint</dt><dd><code>{aiTest.endpoint || 'Not resolved — fix the settings above first'}</code></dd></div>
+                <div><dt>Request</dt><dd>{aiTest.method}</dd></div>
+                <div><dt>HTTP status</dt><dd>{aiTest.status === null ? 'No HTTP response (blocked, offline, timed out, or stopped by a CORS preflight)' : aiTest.status}</dd></div>
+                <div><dt>Model</dt><dd>{aiTest.model || '—'}</dd></div>
+                <div><dt>Time</dt><dd>{(aiTest.durationMs / 1000).toFixed(1)} s</dd></div>
+              </dl>
+              <small>Reported without your API key: no key, header value, or learner record is shown or stored here.</small>
+            </div>}
           </form>
         </section>
         <section className="content-card privacy-card"><div className="card-title"><span className="step-number">04</span><div><h2>Privacy and limits</h2><p>What this first version does and does not do.</p></div></div><ul><li>Study data is stored locally in this browser using IndexedDB.</li><li>AI is optional; no AI request is made unless you choose to send a question or selected study text. Qalumo has no account, backend, tracking, or analytics.</li><li>New web research needs internet. Offline search covers only notes you save.</li><li>Curriculum and practice content is user-provided unless a source is shown; official CAPS alignment is not verified.</li><li>AI answers and question drafts are suggestions, not official guidance. Check them against saved learning resources. AI does not silently create or automatically mark tests.</li><li>Homework supports TXT, text-based PDF, and DOCX text extraction. Image-only PDF OCR is not included. There is no automatic essay marking or cross-device sync.</li><li>The optional LLM feature has not been tested end-to-end in this project and may require internet or a separately configured local service.</li></ul></section>
